@@ -1,0 +1,138 @@
+id: order-orchestrator
+name: Order Orchestrator
+version: "0.1"
+specVersion: "0.8"
+
+start:
+  stateName: AwaitOrder
+
+# ---- Events (CloudEvents used by Event states / eventRef) ----
+events:
+  # We wait on this later (needs correlation)
+  - name: paymentConfirmed
+    type: payment.confirmed
+    source: "app.payments"
+    correlation:
+      - contextAttributeName: subject
+
+  # Outbound events we emit after decisions (easy to set CE context via eventRef)
+  - name: orderAcceptedEvt
+    type: order.accepted
+    source: "app.workflow"
+  - name: orderRejectedEvt
+    type: order.rejected
+    source: "app.workflow"
+  - name: inventoryReleaseEvt
+    type: inventory.release
+    source: "app.workflow"
+  - name: orderCancelledEvt
+    type: order.cancelled
+    source: "app.workflow"
+
+# ---- Functions ----
+functions:
+  # Local Java fraud check
+  - name: fraudCheck
+    type: custom
+    operation: "service:java:com.example.FraudService::check"
+
+  # AsyncAPI 2.6.0 receive function (consumes from Kafka channel via operationId)
+  - name: consumeOrderCreatedFn
+    type: asyncapi
+    operation: "asyncapi/orders-asyncapi.yaml#consumeOrderCreated"
+
+states:
+
+  # Start by CONSUMING from Kafka via AsyncAPI (blocks until an order.created arrives)
+  - name: AwaitOrder
+    type: operation
+    actions:
+      - name: WaitOnOrderCreated
+        functionRef:
+          refName: consumeOrderCreatedFn
+        # If you want to copy the consumed payload into state data explicitly:
+        # actionDataFilter:
+        #   toStateData: "${ . = . }"
+    transition: RunFraud
+
+  - name: RunFraud
+    type: operation
+    actions:
+      - name: DoFraudCheck
+        functionRef:
+          refName: fraudCheck
+          arguments:
+            amount: "${ .data.amount }"
+            customerId: "${ .data.customerId }"
+    transition: RouteDecision
+
+  - name: RouteDecision
+    type: switch
+    dataConditions:
+      - condition: "${ .fraudResult.approved == true }"
+        transition: PublishAccepted
+      - condition: "${ .fraudResult.approved == false }"
+        transition: PublishRejected
+    defaultCondition:
+      transition: PublishRejected
+
+  # Publish ACCEPTED as a CloudEvent (easy to set CE subject for downstream correlation)
+  - name: PublishAccepted
+    type: operation
+    actions:
+      - name: EmitOrderAccepted
+        eventRef:
+          triggerEventRef: orderAcceptedEvt
+          data: "${ { orderId: .data.orderId, reason: \"OK\" } }"
+          context:
+            subject: "${ .data.orderId }"
+    transition: AwaitPayment
+
+  # Publish REJECTED and end
+  - name: PublishRejected
+    type: operation
+    actions:
+      - name: EmitOrderRejected
+        eventRef:
+          triggerEventRef: orderRejectedEvt
+          data: "${ { orderId: .data.orderId, reason: .fraudResult.reason } }"
+          context:
+            subject: "${ .data.orderId }"
+    end: true
+
+  # WAIT for payment.confirmed (Event state gives us a clean timeout path)
+  - name: AwaitPayment
+    type: event
+    onEvents:
+      - eventRefs: [paymentConfirmed]
+        eventDataFilter:
+          toStateData: "${ .payment = .data }"
+        actions: []
+        transition: EndSuccess         # when event arrives
+    timeouts:
+      eventTimeout: PT2M               # 2-minute guard
+    transition: Compensate             # when timeout happens
+
+  # Success terminal state
+  - name: EndSuccess
+    type: operation
+    actions: []
+    end: true
+
+  # Compensation: publish inventory.release and order.cancelled
+  - name: Compensate
+    type: operation
+    actions:
+      - name: EmitRelease
+        eventRef:
+          triggerEventRef: inventoryReleaseEvt
+          data: "${ { orderId: .data.orderId } }"
+          context:
+            subject: "${ .data.orderId }"
+      - name: EmitOrderCancelled
+        eventRef:
+          triggerEventRef: orderCancelledEvt
+          data: "${ { orderId: .data.orderId, reason: \"payment-timeout\" } }"
+          context:
+            subject: "${ .data.orderId }"
+    end: true

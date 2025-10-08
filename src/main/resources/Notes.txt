@@ -1,0 +1,36 @@
+###Old
+create app com.workflow:serverless-workflow
+mvnw quarkus:add-extension -Dextensions="org.apache.kie.sonataflow:sonataflow-quarkus-extension:10.1.0"
+quarkus ext add io.quarkus:quarkus-messaging-kafka
+mvnw quarkus:add-extension -Dextensions="org.apache.kie.sonataflow:sonataflow-quarkus-devui:10.1.0"
+mvnw quarkus:add-extension -Dextensions="io.quarkiverse.asyncapi:quarkus-asyncapi:1.0.4"
+
+#New Instruction
+mvn io.quarkus.platform:quarkus-maven-plugin:create \
+  -DprojectGroupId=com.workflow \
+  -DprojectArtifactId=serverless-workflow
+cd serverless-workflow
+
+# Quarkiverse AsyncAPI – reads your asyncapi.yaml and exposes it as MicroProfile config
+./mvnw quarkus:add-extension -Dextensions="io.quarkiverse.asyncapi:quarkus-asyncapi"
+
+# SonataFlow / Serverless Workflow runtime for Quarkus
+./mvnw quarkus:add-extension -Dextensions="org.apache.kie.sonataflow:sonataflow-quarkus-extension:10.1.0"
+
+# Kafka connector (new artifact name)
+./mvnw quarkus:add-extension -Dextensions="io.quarkus:quarkus-messaging-kafka"
+
+#Create topics named exactly like your channels:
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.created --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic payment.confirmed --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.accepted --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.rejected --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic inventory.release --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.cancelled --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+
+#Verify
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
+
+#Running the app
+mvnw -U -DskipTests clean package
+mvnw quarkus:dev
