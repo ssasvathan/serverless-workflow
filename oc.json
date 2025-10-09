@@ -1,0 +1,1 @@
+﻿{ "specversion":"1.0","id":"evt-oc-001","source":"urn:orders:web","type":"order.created","subject":"order-123","time":"2025-10-07T20:00:00Z","datacontenttype":"application/json","data":{"orderId":"order-123","amount":9500,"customerId":"cust-001"}}

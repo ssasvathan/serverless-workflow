@@ -1,225 +1,226 @@
+# src/main/resources/asyncapi/orders-asyncapi.yaml
 asyncapi: '2.6.0'
 info:
-  title: Orders EDA (Kafka + CloudEvents)
-  version: 1.0.0
-
-# We'll send/receive structured CloudEvents as JSON
+  title: Orders Orchestrator Ingress/Egress
+  version: '1.0.0'
+  description: "AsyncAPI 2.6 contract for inbound/outbound events. Note: we intentionally keep `topics == CloudEvent type` for 1:1 mapping."
 defaultContentType: application/cloudevents+json
 
 servers:
-  development:
+  local:
     url: localhost:9092
     protocol: kafka
-    protocolVersion: '1.0.0'
+    description: "Local Kafka broker."
 
 channels:
-  # ---- INCOMING (used by workflow via AsyncAPI function) ----
   order.created:
-    description: "Incoming orders (CloudEvent: type=order.created, structured)."
+    description: "Inbound event that starts the workflow."
     subscribe:
-      operationId: consumeOrderCreated        # <-- referenced by the workflow
+      operationId: consumeOrderCreated
       message:
-        $ref: '#/components/messages/OrderCreatedCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
-
-  # ---- INCOMING (documented; your workflow waits via Event state) ----
+        $ref: '#/components/messages/CloudEventOrderCreated'
   payment.confirmed:
-    description: "Payment confirmation (CloudEvent: type=payment.confirmed, structured)."
+    description: "Inbound event awaited by the workflow for up to 2 minutes."
     subscribe:
       operationId: consumePaymentConfirmed
       message:
-        $ref: '#/components/messages/PaymentConfirmedCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
-
-  # ---- OUTGOING (documented; your workflow emits via eventRef) ----
+        $ref: '#/components/messages/CloudEventPaymentConfirmed'
   order.accepted:
-    description: "Order accepted (CloudEvent: type=order.accepted, structured)."
+    description: "Outbound event published after successful fraud check."
     publish:
-      operationId: publishOrderAccepted
+      operationId: produceOrderAccepted
       message:
-        $ref: '#/components/messages/OrderAcceptedCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
-
+        $ref: '#/components/messages/CloudEventOrderAccepted'
   order.rejected:
-    description: "Order rejected (CloudEvent: type=order.rejected, structured)."
+    description: "Outbound event published when fraud check fails."
     publish:
-      operationId: publishOrderRejected
+      operationId: produceOrderRejected
       message:
-        $ref: '#/components/messages/OrderRejectedCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
-
+        $ref: '#/components/messages/CloudEventOrderRejected'
   inventory.release:
-    description: "Release reserved inventory (CloudEvent: type=inventory.release, structured)."
+    description: "Outbound event used for compensation when payment times out or is rejected."
     publish:
-      operationId: publishInventoryRelease
+      operationId: produceInventoryRelease
       message:
-        $ref: '#/components/messages/InventoryReleaseCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
-
+        $ref: '#/components/messages/CloudEventInventoryRelease'
   order.cancelled:
-    description: "Order cancelled (CloudEvent: type=order.cancelled, structured)."
+    description: "Outbound event to cancel the order following compensation."
     publish:
-      operationId: publishOrderCancelled
+      operationId: produceOrderCancelled
       message:
-        $ref: '#/components/messages/OrderCancelledCE'
-    bindings:
-      kafka:
-        bindingVersion: '0.5.0'
+        $ref: '#/components/messages/CloudEventOrderCancelled'
 
 components:
-  messages:
-    # Each message is a CloudEvent envelope with your business schema in `data`
-    OrderCreatedCE:
-      name: OrderCreatedCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'order.created' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/OrderCreated'
-
-    PaymentConfirmedCE:
-      name: PaymentConfirmedCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'payment.confirmed' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/PaymentConfirmed'
-
-    OrderAcceptedCE:
-      name: OrderAcceptedCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'order.accepted' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/OrderAccepted'
-
-    OrderRejectedCE:
-      name: OrderRejectedCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'order.rejected' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/OrderRejected'
-
-    InventoryReleaseCE:
-      name: InventoryReleaseCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'inventory.release' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/InventoryRelease'
-
-    OrderCancelledCE:
-      name: OrderCancelledCE
-      contentType: application/cloudevents+json
-      payload:
-        type: object
-        required: [specversion, id, type, source, data]
-        properties:
-          specversion: { type: string, enum: ['1.0'] }
-          id:          { type: string }
-          type:        { type: string, const: 'order.cancelled' }
-          source:      { type: string }
-          subject:     { type: string }
-          datacontenttype: { type: string, const: 'application/json' }
-          time:        { type: string, format: date-time }
-          data:
-            $ref: '#/components/schemas/OrderCancelled'
-
   schemas:
-    OrderCreated:
+    CloudEventBase:
       type: object
-      required: [orderId, amount, customerId]
+      required: [specversion, id, source, type, data]
       properties:
-        orderId: { type: string }
-        amount:  { type: number }
-        customerId: { type: string }
-
-    PaymentConfirmed:
+        specversion:
+          type: string
+          enum: ['1.0']
+        id:
+          type: string
+        source:
+          type: string
+        type:
+          type: string
+        subject:
+          type: string
+          description: "Correlation key. We use the order id here."
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          example: application/json
+        data:
+          type: object
+    OrderCreatedData:
       type: object
-      required: [orderId, status]
+      required: [orderId, amount]
       properties:
-        orderId: { type: string }
-        status:  { type: string, enum: [authorized, captured] }
-
-    OrderAccepted:
+        orderId:
+          type: string
+        amount:
+          type: number
+          format: double
+        customerId:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+              qty:
+                type: integer
+    PaymentConfirmedData:
       type: object
-      required: [orderId, reason]
+      required: [orderId, paymentId, amount]
       properties:
-        orderId: { type: string }
-        reason:  { type: string }
-
-    OrderRejected:
-      type: object
-      required: [orderId, reason]
-      properties:
-        orderId: { type: string }
-        reason:  { type: string }
-
-    InventoryRelease:
+        orderId:
+          type: string
+        paymentId:
+          type: string
+        amount:
+          type: number
+          format: double
+    OrderAcceptedData:
       type: object
       required: [orderId]
       properties:
-        orderId: { type: string }
-
-    OrderCancelled:
+        orderId:
+          type: string
+        reason:
+          type: string
+    OrderRejectedData:
       type: object
       required: [orderId, reason]
       properties:
-        orderId: { type: string }
-        reason:  { type: string }
+        orderId:
+          type: string
+        reason:
+          type: string
+    InventoryReleaseData:
+      type: object
+      required: [orderId]
+      properties:
+        orderId:
+          type: string
+        note:
+          type: string
+    OrderCancelledData:
+      type: object
+      required: [orderId]
+      properties:
+        orderId:
+          type: string
+        reason:
+          type: string
+
+  messages:
+    CloudEventOrderCreated:
+      name: order.created
+      title: "CloudEvent (structured) for order.created"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: order.created
+              data:
+                $ref: '#/components/schemas/OrderCreatedData'
+
+    CloudEventPaymentConfirmed:
+      name: payment.confirmed
+      title: "CloudEvent (structured) for payment.confirmed"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: payment.confirmed
+              data:
+                $ref: '#/components/schemas/PaymentConfirmedData'
+
+    CloudEventOrderAccepted:
+      name: order.accepted
+      title: "CloudEvent (structured) for order.accepted"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: order.accepted
+              data:
+                $ref: '#/components/schemas/OrderAcceptedData'
+
+    CloudEventOrderRejected:
+      name: order.rejected
+      title: "CloudEvent (structured) for order.rejected"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: order.rejected
+              data:
+                $ref: '#/components/schemas/OrderRejectedData'
+
+    CloudEventInventoryRelease:
+      name: inventory.release
+      title: "CloudEvent (structured) for inventory.release"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: inventory.release
+              data:
+                $ref: '#/components/schemas/InventoryReleaseData'
+
+    CloudEventOrderCancelled:
+      name: order.cancelled
+      title: "CloudEvent (structured) for order.cancelled"
+      contentType: application/cloudevents+json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/CloudEventBase'
+          - type: object
+            properties:
+              type:
+                const: order.cancelled
+              data:
+                $ref: '#/components/schemas/OrderCancelledData'

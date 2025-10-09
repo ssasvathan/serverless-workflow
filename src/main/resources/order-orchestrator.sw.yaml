@@ -1,138 +1,154 @@
+# src/main/resources/order-orchestrator.sw.yaml
 id: order-orchestrator
 name: Order Orchestrator
-version: "0.1"
-specVersion: "0.8"
+version: '1.0'
+specVersion: '0.8'
+description: >
+  Starts on order.created (Kafka), fraud-checks, publishes order.accepted/order.rejected,
+  waits for payment.confirmed with 2-minute timeout, compensates on timeout.
 
 start:
-  stateName: AwaitOrder
+  stateName: AwaitOrderCreated
 
-# ---- Events (CloudEvents used by Event states / eventRef) ----
-events:
-  # We wait on this later (needs correlation)
-  - name: paymentConfirmed
-    type: payment.confirmed
-    source: "app.payments"
-    correlation:
-      - contextAttributeName: subject
-
-  # Outbound events we emit after decisions (easy to set CE context via eventRef)
-  - name: orderAcceptedEvt
-    type: order.accepted
-    source: "app.workflow"
-  - name: orderRejectedEvt
-    type: order.rejected
-    source: "app.workflow"
-  - name: inventoryReleaseEvt
-    type: inventory.release
-    source: "app.workflow"
-  - name: orderCancelledEvt
-    type: order.cancelled
-    source: "app.workflow"
-
-# ---- Functions ----
 functions:
-  # Local Java fraud check
   - name: fraudCheck
     type: custom
-    operation: "service:java:com.example.FraudService::check"
+    operation: "java:com.example.FraudService::check"
 
-  # AsyncAPI 2.6.0 receive function (consumes from Kafka channel via operationId)
-  - name: consumeOrderCreatedFn
-    type: asyncapi
-    operation: "asyncapi/orders-asyncapi.yaml#consumeOrderCreated"
+events:
+  # NOTE: types here are Java-safe identifiers (no dots). We still use dotted Kafka topics.
+  - name: orderCreatedEvt
+    type: "orderCreated"
+    kind: consumed
+    correlation:
+      - contextAttributeName: subject
+  - name: paymentConfirmedEvt
+    type: "paymentConfirmed"
+    kind: consumed
+    correlation:
+      - contextAttributeName: subject
+  - name: orderAcceptedEvt
+    source: "urn:order-orchestrator"
+    type: "orderAccepted"
+    kind: produced
+
+  - name: orderRejectedEvt
+    source: "urn:order-orchestrator"
+    type: "orderRejected"
+    kind: produced
+
+  - name: inventoryReleaseEvt
+    source: "urn:order-orchestrator"
+    type: "inventoryRelease"
+    kind: produced
+
+  - name: orderCancelledEvt
+    source: "urn:order-orchestrator"
+    type: "orderCancelled"
+    kind: produced
 
 states:
 
-  # Start by CONSUMING from Kafka via AsyncAPI (blocks until an order.created arrives)
-  - name: AwaitOrder
-    type: operation
-    actions:
-      - name: WaitOnOrderCreated
-        functionRef:
-          refName: consumeOrderCreatedFn
-        # If you want to copy the consumed payload into state data explicitly:
-        # actionDataFilter:
-        #   toStateData: "${ . = . }"
-    transition: RunFraud
+  - name: AwaitOrderCreated
+    type: event
+    onEvents:
+      - eventRefs: [orderCreatedEvt]
+        eventDataFilter:
+          toStateData: "${ . + { data: .data } }"
+        actions: []
+    transition: FraudCheck
 
-  - name: RunFraud
+  - name: FraudCheck
     type: operation
     actions:
-      - name: DoFraudCheck
+      - name: InvokeFraudCheck
         functionRef:
           refName: fraudCheck
           arguments:
-            amount: "${ .data.amount }"
-            customerId: "${ .data.customerId }"
-    transition: RouteDecision
+            order: "${ .data }"
+        actionDataFilter:
+          results: "${ . }"          # result of FraudService::check (true/false)
+          toStateData: ".fraudOk"    # put that boolean at .fraudOk
+    transition: FraudDecision
 
-  - name: RouteDecision
+  - name: FraudDecision
     type: switch
     dataConditions:
-      - condition: "${ .fraudResult.approved == true }"
-        transition: PublishAccepted
-      - condition: "${ .fraudResult.approved == false }"
-        transition: PublishRejected
+      - condition: "${ .fraudOk == true }"
+        transition: EmitOrderAccepted
+      - condition: "${ .fraudOk == false }"
+        transition: EmitOrderRejected
     defaultCondition:
-      transition: PublishRejected
+      transition: EmitOrderRejected
 
-  # Publish ACCEPTED as a CloudEvent (easy to set CE subject for downstream correlation)
-  - name: PublishAccepted
+  - name: EmitOrderAccepted
     type: operation
     actions:
-      - name: EmitOrderAccepted
+      - name: PublishOrderAccepted
         eventRef:
           triggerEventRef: orderAcceptedEvt
-          data: "${ { orderId: .data.orderId, reason: \"OK\" } }"
-          context:
+          # Set the outgoing CloudEvent attributes explicitly:
+          contextAttributes:
             subject: "${ .data.orderId }"
-    transition: AwaitPayment
+            type: "order.accepted"             # CE type (dotted)
+            datacontenttype: "application/json"
+          data: "${ { orderId: .data.orderId, reason: \"Approved by fraud service\" } }"
+    transition: WaitForPayment
 
-  # Publish REJECTED and end
-  - name: PublishRejected
+  - name: EmitOrderRejected
     type: operation
     actions:
-      - name: EmitOrderRejected
+      - name: PublishOrderRejected
         eventRef:
           triggerEventRef: orderRejectedEvt
-          data: "${ { orderId: .data.orderId, reason: .fraudResult.reason } }"
-          context:
+          contextAttributes:
             subject: "${ .data.orderId }"
+            type: "order.rejected"
+            datacontenttype: "application/json"
+          data: "${ { orderId: .data.orderId, reason: \"Amount exceeds risk threshold\" } }"
     end: true
 
-  # WAIT for payment.confirmed (Event state gives us a clean timeout path)
-  - name: AwaitPayment
+  - name: WaitForPayment
     type: event
-    onEvents:
-      - eventRefs: [paymentConfirmed]
-        eventDataFilter:
-          toStateData: "${ .payment = .data }"
-        actions: []
-        transition: EndSuccess         # when event arrives
     timeouts:
-      eventTimeout: PT2M               # 2-minute guard
-    transition: Compensate             # when timeout happens
+      eventTimeout: PT2M
+    onEvents:
+      - eventRefs: [paymentConfirmedEvt]
+        eventDataFilter:
+          toStateData: "${ . + { payment: .data } }"
+        actions: []
+    transition: AfterWait
 
-  # Success terminal state
-  - name: EndSuccess
-    type: operation
-    actions: []
-    end: true
+  - name: AfterWait
+    type: switch
+    dataConditions:
+      - condition: "${ .payment != null }"
+        transition: EndSuccess
+    defaultCondition:
+      transition: Compensate
 
-  # Compensation: publish inventory.release and order.cancelled
   - name: Compensate
     type: operation
     actions:
-      - name: EmitRelease
+      - name: PublishInventoryRelease
         eventRef:
           triggerEventRef: inventoryReleaseEvt
-          data: "${ { orderId: .data.orderId } }"
-          context:
+          contextAttributes:
             subject: "${ .data.orderId }"
-      - name: EmitOrderCancelled
+            type: "inventory.release"
+            datacontenttype: "application/json"
+          data: "${ { orderId: .data.orderId, note: \"Payment timeout. Releasing inventory.\" } }"
+      - name: PublishOrderCancelled
         eventRef:
           triggerEventRef: orderCancelledEvt
-          data: "${ { orderId: .data.orderId, reason: \"payment-timeout\" } }"
-          context:
+          contextAttributes:
             subject: "${ .data.orderId }"
+            type: "order.cancelled"
+            datacontenttype: "application/json"
+          data: "${ { orderId: .data.orderId, reason: \"Payment not confirmed in time\" } }"
+    end: true
+
+  - name: EndSuccess
+    type: operation
+    actions: []
     end: true
