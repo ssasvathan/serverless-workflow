@@ -1,14 +1,19 @@
 # src/main/resources/order-orchestrator.sw.yaml
+#$schema: "https://raw.githubusercontent.com/serverlessworkflow/specification/v0.8/schema/workflow.json"
+
 id: order-orchestrator
 name: Order Orchestrator
-version: '1.0'
-specVersion: '0.8'
+version: "1.0"
+specVersion: "0.8"
 description: >
   Starts on order.created (Kafka), fraud-checks, publishes order.accepted/order.rejected,
   waits for payment.confirmed with 2-minute timeout, compensates on timeout.
 
+# Start directly at the event state (no schedule variant)
 start:
   stateName: AwaitOrderCreated
+  schedule:
+    cron: "0 0 * * *"   # Example: runs daily at midnight
 
 functions:
   - name: fraudCheck
@@ -16,17 +21,22 @@ functions:
     operation: "java:com.example.FraudService::check"
 
 events:
-  # NOTE: types here are Java-safe identifiers (no dots). We still use dotted Kafka topics.
+  # Consumed (camelCase CE.type)
   - name: orderCreatedEvt
+    source: "urn:orders"
     type: "orderCreated"
     kind: consumed
     correlation:
       - contextAttributeName: subject
+
   - name: paymentConfirmedEvt
+    source: "urn:payments"
     type: "paymentConfirmed"
     kind: consumed
     correlation:
       - contextAttributeName: subject
+
+  # Produced (names match your Quarkus outgoing channel names if you used *Evt)
   - name: orderAcceptedEvt
     source: "urn:order-orchestrator"
     type: "orderAccepted"
@@ -52,10 +62,10 @@ states:
   - name: AwaitOrderCreated
     type: event
     onEvents:
-      - eventRefs: [orderCreatedEvt]
+      - eventRefs:
+          - orderCreatedEvt
         eventDataFilter:
           toStateData: "${ . + { data: .data } }"
-        actions: []
     transition: FraudCheck
 
   - name: FraudCheck
@@ -67,8 +77,8 @@ states:
           arguments:
             order: "${ .data }"
         actionDataFilter:
-          results: "${ . }"          # result of FraudService::check (true/false)
-          toStateData: ".fraudOk"    # put that boolean at .fraudOk
+          results: "${ . }"          # boolean result
+          toStateData: ".fraudOk"
     transition: FraudDecision
 
   - name: FraudDecision
@@ -87,11 +97,12 @@ states:
       - name: PublishOrderAccepted
         eventRef:
           triggerEventRef: orderAcceptedEvt
-          # Set the outgoing CloudEvent attributes explicitly:
+          resultEventRef: ~
           contextAttributes:
             subject: "${ .data.orderId }"
-            type: "order.accepted"             # CE type (dotted)
+            type: "order.accepted"       # CE.type for downstream systems (dotted)
             datacontenttype: "application/json"
+            traceparent: "${ .data.traceparent }"
           data: "${ { orderId: .data.orderId, reason: \"Approved by fraud service\" } }"
     transition: WaitForPayment
 
@@ -101,9 +112,11 @@ states:
       - name: PublishOrderRejected
         eventRef:
           triggerEventRef: orderRejectedEvt
+          resultEventRef: ~
           contextAttributes:
             subject: "${ .data.orderId }"
             type: "order.rejected"
+            traceparent: "${ .data.traceparent }"
             datacontenttype: "application/json"
           data: "${ { orderId: .data.orderId, reason: \"Amount exceeds risk threshold\" } }"
     end: true
@@ -113,10 +126,10 @@ states:
     timeouts:
       eventTimeout: PT2M
     onEvents:
-      - eventRefs: [paymentConfirmedEvt]
+      - eventRefs:
+          - paymentConfirmedEvt
         eventDataFilter:
           toStateData: "${ . + { payment: .data } }"
-        actions: []
     transition: AfterWait
 
   - name: AfterWait
@@ -133,22 +146,26 @@ states:
       - name: PublishInventoryRelease
         eventRef:
           triggerEventRef: inventoryReleaseEvt
+          resultEventRef: ~
           contextAttributes:
             subject: "${ .data.orderId }"
             type: "inventory.release"
             datacontenttype: "application/json"
+            traceparent: "${ .data.traceparent }"
           data: "${ { orderId: .data.orderId, note: \"Payment timeout. Releasing inventory.\" } }"
       - name: PublishOrderCancelled
         eventRef:
           triggerEventRef: orderCancelledEvt
+          resultEventRef: ~
           contextAttributes:
             subject: "${ .data.orderId }"
             type: "order.cancelled"
             datacontenttype: "application/json"
+            traceparent: "${ .data.traceparent }"
           data: "${ { orderId: .data.orderId, reason: \"Payment not confirmed in time\" } }"
     end: true
 
   - name: EndSuccess
-    type: operation
-    actions: []
+    type: inject
+    data: "${ . }"
     end: true

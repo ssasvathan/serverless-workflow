@@ -23,8 +23,8 @@ cd serverless-workflow
 #Create topics named exactly like your channels:
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.created --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic payment.confirmed --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
-docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.accepted --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.rejected --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
+docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.accepted --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic inventory.release --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --create --topic order.cancelled --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1"
 
@@ -32,11 +32,14 @@ docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.
 docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
 
 #Running the app
+REM ---- Set Java agent and OTel trace export to Jaeger gRPC (4317) ----
 mvnw -U -DskipTests clean package
+set "JAVA_TOOL_OPTIONS=-javaagent:C:/Users/Sas/workspace/serverless-workflow/src/main/resources/opentelemetry-javaagent.jar -Dotel.exporter.otlp.traces.endpoint=http://localhost:4317 -Dotel.exporter.otlp.traces.protocol=grpc"
 mvnw quarkus:dev
+mvnw quarkus:dev -Ddebug=5005 -Dsuspend=false
 
 #Publish kafka event
-docker exec -it f5ff1aa86522 /bin/bash
+docker exec -it 16567daafe47 /bin/bash
 kcat -b localhost:9092 -t order.created \
   -H "content-type=application/cloudevents+json" -P <<'EOF'
 { "specversion":"1.0","id":"evt-oc-001","source":"urn:orders:web","type":"order.created","subject":"order-123","time":"2025-10-07T20:00:00Z","datacontenttype":"application/json","data":{"orderId":"order-123","amount":9500,"customerId":"cust-001"}}
