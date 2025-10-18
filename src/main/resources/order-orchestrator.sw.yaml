@@ -12,13 +12,14 @@ description: >
 # Start directly at the event state (no schedule variant)
 start:
   stateName: AwaitOrderCreated
-  schedule:
-    cron: "0 0 * * *"   # Example: runs daily at midnight
-
 functions:
   - name: fraudCheck
     type: custom
-    operation: "java:com.example.FraudService::check"
+    operation: "service:java:com.example.FraudService::fraudCheck"
+  
+  - name: logInfo
+    type: custom
+    operation: "sysout:INFO"
 
 events:
   # Consumed (camelCase CE.type)
@@ -65,7 +66,16 @@ states:
       - eventRefs:
           - orderCreatedEvt
         eventDataFilter:
-          toStateData: "${ . + { data: .data } }"
+          data: ".data"
+          toStateData: ".order"
+    transition: DebugState
+
+  - name: DebugState
+    type: operation
+    actions:
+    - functionRef:
+        refName: logInfo
+        arguments: { message: "\"State before FraudCheck: \\(.) & Order data: \\(.order)\"" }
     transition: FraudCheck
 
   - name: FraudCheck
@@ -75,10 +85,10 @@ states:
         functionRef:
           refName: fraudCheck
           arguments:
-            order: "${ .data }"
+            order: "${ . }"
         actionDataFilter:
           results: "${ . }"          # boolean result
-          toStateData: ".fraudOk"
+          toStateData: ".fraudOk"   # map the action result into stateData.fraudOk
     transition: FraudDecision
 
   - name: FraudDecision
@@ -129,13 +139,21 @@ states:
       - eventRefs:
           - paymentConfirmedEvt
         eventDataFilter:
-          toStateData: "${ . + { payment: .data } }"
+          toStateData: "${ . }"
+    transition: DebugAfterWaitForPaymentState
+
+  - name: DebugAfterWaitForPaymentState
+    type: operation
+    actions:
+    - functionRef:
+        refName: logInfo
+        arguments: { message: "\"State before AfterWait: \\(.) & Payment data: \\(.paymentId)\"" }
     transition: AfterWait
 
   - name: AfterWait
     type: switch
     dataConditions:
-      - condition: "${ .payment != null }"
+      - condition: "${ .paymentId != null }"
         transition: EndSuccess
     defaultCondition:
       transition: Compensate

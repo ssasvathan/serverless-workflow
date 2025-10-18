@@ -1,7 +1,5 @@
 package com.example;
 
-import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -9,6 +7,11 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
 import java.util.logging.Logger;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+import jakarta.annotation.PostConstruct;
+import jakarta.enterprise.context.ApplicationScoped;
 
 @ApplicationScoped
 public class FraudService {
@@ -22,9 +25,15 @@ public class FraudService {
       .connectTimeout(Duration.ofSeconds(3))
       .build();
 
+  @PostConstruct
+  void onInit() {
+    LOG.info(() -> "FraudService CDI bean initialized. fraud.service.url=" + fraudUrl);
+  }
+
   /** Serverless Workflow custom function entrypoint. Must be public, non-static. */
-  public boolean check(Map<String, Object> order) {
+  public boolean fraudCheck(Map<String, Object> order) {
     try {
+      LOG.info(() -> "FraudService.check called with order=" + order);
       String body = com.fasterxml.jackson.databind.json.JsonMapper.builder()
           .findAndAddModules().build()
           .writeValueAsString(order == null ? Map.of() : order);
