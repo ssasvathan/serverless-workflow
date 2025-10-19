@@ -2,13 +2,16 @@ services:
   kafka:
     image: apache/kafka:3.9.1
     container_name: kafka-serverless-workflow
+    networks:
+      - agent-mesh-networks
     ports:
       - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-serverless-workflow:9092,EXTERNAL://localhost:9094
+      #KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-serverless-workflow:9092,EXTERNAL://kafka:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-serverless-workflow:9092,EXTERNAL://host.docker.internal:9094
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-serverless-workflow:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
@@ -19,7 +22,35 @@ services:
     container_name: jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"   # <-- correct switch for Jaeger AIO
+    networks:
+      - agent-mesh-networks
     ports:
       - "16686:16686"                  # UI
       - "4317:4317"                    # OTLP gRPC (traces)
       - "4318:4318"                    # OTLP HTTP (traces)
+
+  init-kafka:
+    image: apache/kafka:3.9.1
+    depends_on:
+      - kafka
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+          "
+          # blocks until kafka is reachable
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-serverless-workflow:9092 --list
+
+          echo -e 'Creating kafka topics'
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic order.created --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic payment.confirmed --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic order.rejected --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic order.accepted --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic inventory.release --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+          /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic order.cancelled --bootstrap-server kafka-serverless-workflow:9092 --partitions 3 --replication-factor 1"
+
+          echo -e 'Successfully created the following topics:'
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-serverless-workflow:9092 --list
+          "
+
+networks:
+  agent-mesh-networks:
+    external: true

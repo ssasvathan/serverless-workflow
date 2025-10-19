@@ -34,7 +34,7 @@ docker exec -it kafka-serverless-workflow bash -lc "/opt/kafka/bin/kafka-topics.
 #Running the app
 REM ---- Set Java agent and OTel trace export to Jaeger gRPC (4317) ----
 mvnw -U -DskipTests clean package
-set "JAVA_TOOL_OPTIONS=-javaagent:C:/Users/Sas/workspace/serverless-workflow/src/main/resources/opentelemetry-javaagent.jar -Dotel.exporter.otlp.traces.endpoint=http://localhost:4317 -Dotel.exporter.otlp.traces.protocol=grpc"
+set "JAVA_TOOL_OPTIONS=-javaagent:C:/Users/Sas/workspace/serverless-workflow/src/main/resources/opentelemetry-javaagent.jar -Dotel.exporter.otlp.endpoint=http://localhost:4318 -Dotel.exporter.otlp.protocol=http/protobuf -Dotel.metrics.exporter=none -Dotel.logs.exporter=none"
 mvnw quarkus:dev
 mvnw quarkus:dev -Ddebug=5005 -Dsuspend=false
 

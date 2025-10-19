@@ -138,8 +138,6 @@ states:
     onEvents:
       - eventRefs:
           - paymentConfirmedEvt
-        eventDataFilter:
-          toStateData: "${ . }"
     transition: DebugAfterWaitForPaymentState
 
   - name: DebugAfterWaitForPaymentState
